@@ -1,0 +1,6 @@
+[package]
+name = "rust-tag-server"
+version = "0.1.0"
+authors = ["Cory Kolbeck <cory.kolbeck@urbanairship.com>"]
+
+[dependencies]
