@@ -2,13 +2,10 @@ extern crate core;
 
 use std::thread;
 use std::sync::{mpsc, Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::TryRecvError;
 
 pub struct ThreadPool {
     workers: Vec<Worker>,
-    queue: mpsc::SyncSender<Job>,
-    should_run: Arc<AtomicBool>,
+    queue: mpsc::SyncSender<QueueItem>
 }
 
 impl ThreadPool {
@@ -18,18 +15,16 @@ impl ThreadPool {
 
         let (sender, receiver) = mpsc::sync_channel(queue_len);
         let receiver = Arc::new(Mutex::new(receiver));
-        let should_run = Arc::new(AtomicBool::new(true));
 
         let mut workers = Vec::with_capacity(threads);
 
         for _ in 0..threads {
-            workers.push(Worker::new(should_run.clone(), Arc::clone(&receiver)))
+            workers.push(Worker::new(Arc::clone(&receiver)))
         }
 
         ThreadPool {
             workers,
             queue: sender,
-            should_run,
         }
     }
 
@@ -37,7 +32,7 @@ impl ThreadPool {
         where F: FnOnce() + Send + 'static
     {
         let job = Box::new(func);
-        match self.queue.send(job) {
+        match self.queue.send(QueueItem::Work(job)) {
             Ok(_) => true,
             Err(_) => false,
         }
@@ -46,7 +41,12 @@ impl ThreadPool {
 
 impl Drop for ThreadPool {
     fn drop(&mut self) {
-        self.should_run.store(false, Ordering::Relaxed);
+        for _ in self.workers.iter() {
+            match self.queue.send(QueueItem::ShutdownSignal) {
+                Ok(_) => {},
+                Err(_) => eprintln!("Failed to dispatch shutdown signal"),
+            }
+        }
 
         while self.workers.len() > 0 {
             let worker = self.workers.pop().unwrap();
@@ -67,26 +67,27 @@ impl<F: FnOnce()> FnBox for F {
 
 type Job = Box<FnBox + Send + 'static>;
 
+enum QueueItem {
+    ShutdownSignal,
+    Work(Job)
+}
+
 struct Worker {
     thread: thread::JoinHandle<()>
 }
 
 impl Worker {
-    fn new(should_run: Arc<AtomicBool>, queue: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
+    fn new(queue: Arc<Mutex<mpsc::Receiver<QueueItem>>>) -> Worker {
         let thread = thread::spawn(move || {
             loop {
                 let job = {
-                    queue.lock().unwrap().try_recv()
+                    queue.lock().unwrap().recv()
                 };
 
                 match job {
-                    Ok(job) => job.call_box(),
-                    Err(TryRecvError::Disconnected) => return,
-                    Err(TryRecvError::Empty) => {
-                        if !should_run.load(Ordering::Relaxed) {
-                            return;
-                        }
-                    }
+                    Ok(QueueItem::Work(job)) => job.call_box(),
+                    Ok(QueueItem::ShutdownSignal) => return,
+                    Err(_) => return,
                 }
             }
         });
