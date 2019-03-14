@@ -3,33 +3,52 @@ extern crate http;
 
 use rust_tag_server::httpd::{WebServer, Handler, Router, Request};
 use http::StatusCode;
-use std::io::{Read, Write};
+use std::io::{Write, Error, Read};
 
 struct Echo;
 
 impl Handler for Echo {
-    fn handle(&self, request: &mut Request) {
-        let mut request_body = Vec::new();
+    fn handle(&self, request: &mut Request) -> Result<(), Error> {
 
-        match request.reader.read_to_end(&mut request_body) {
-            Ok(_) => {},
-            Err(_) => {
-                request.begin_response(StatusCode::BAD_REQUEST, 0);
-                return;
-            },
+        let length = {
+            if let Some(length) = request.get_request_header("Content-Length") {
+                if let Ok(length) = length.parse::<i32>() {
+                    length
+                } else {
+                    -1
+                }
+            } else {
+                -1
+            }
+        };
+
+        if length >= 0 {
+            let mut vec = vec![b'\n'; length as usize];
+            let buf = vec.as_mut_slice();
+            request.reader.read_exact(buf)?;
+
+            match request.send_preamble(StatusCode::OK, buf.len()) {
+                Ok(()) => {
+                    request.write(buf)?;
+                }
+                Err(a) => return Err(a)
+            }
+
+//        } else if length == 0 {
+//            request.send_preamble(StatusCode::OK, 0)
+        } else {
+            request.send_preamble(StatusCode::BAD_REQUEST, 0)?;
         }
 
-        if let Ok(()) = request.begin_response(StatusCode::OK, request_body.len()) {
-            request.write(request_body.as_slice());
-        }
+        Ok(())
     }
 }
 
 fn main() {
     let mut router = Router::new();
-    router.add_route("GET", "/", Echo);
+    router.add_route("/", "POST", Echo);
 
-    let server = WebServer::new("127.0.0.1:8080", router, 100, 10000)
+    let server = WebServer::new("127.0.0.1:8080", router, 100, 10000, |err| {eprintln!("{}", err)})
         .expect("Welp");
 
     server.run();

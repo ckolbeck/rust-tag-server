@@ -6,3 +6,4 @@ authors = ["Cory Kolbeck <cory.kolbeck@urbanairship.com>"]
 [dependencies]
 
 http = "0.1.16"
+regex = "1"
