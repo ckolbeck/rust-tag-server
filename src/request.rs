@@ -1,5 +1,3 @@
-extern crate regex;
-
 use std::net::TcpStream;
 use std::collections::HashMap;
 use std::io::{Write, Error, BufReader, BufWriter, BufRead};
